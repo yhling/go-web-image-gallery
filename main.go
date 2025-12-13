@@ -9,13 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/cshum/vipsgen/vips"
 )
 
 type Server struct {
-	rootDir   string
-	indexTmpl *template.Template
+	rootDir        string
+	indexTmpl      *template.Template
+	thumbnailQueue chan string
+	workersWg      sync.WaitGroup
 }
 
 type FileInfo struct {
@@ -61,9 +64,21 @@ func main() {
 		log.Fatalf("Failed to load template: %v", err)
 	}
 
+	// Initialize thumbnail queue with buffer to prevent blocking
+	// Buffer size of 100 allows some queuing before blocking
+	queueSize := 500
+	numWorkers := 3 // Limit concurrent thumbnail generations to prevent memory issues
+
 	server := &Server{
-		rootDir:   absRoot,
-		indexTmpl: tmpl,
+		rootDir:        absRoot,
+		indexTmpl:      tmpl,
+		thumbnailQueue: make(chan string, queueSize),
+	}
+
+	// Start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		server.workersWg.Add(1)
+		go server.thumbnailWorker(i)
 	}
 
 	http.HandleFunc("/", server.handleIndex)
@@ -154,8 +169,14 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 				thumbPath = "/" + thumbPath
 			}
 			fileInfo.Thumbnail = "/api/thumbnail" + thumbPath
-			// Generate thumbnail asynchronously
-			go s.generateThumbnail(entryPath)
+			// Queue thumbnail generation (non-blocking if queue has space)
+			select {
+			case s.thumbnailQueue <- entryPath:
+				// Successfully queued
+			default:
+				// Queue is full, skip to prevent blocking
+				log.Printf("Thumbnail queue full, skipping: %s", entryPath)
+			}
 		}
 
 		files = append(files, fileInfo)
@@ -439,6 +460,16 @@ func (s *Server) generateThumbnail(imagePath string) error {
 	}
 
 	return nil
+}
+
+func (s *Server) thumbnailWorker(workerID int) {
+	defer s.workersWg.Done()
+
+	for imagePath := range s.thumbnailQueue {
+		if err := s.generateThumbnail(imagePath); err != nil {
+			log.Printf("Worker %d: Failed to generate thumbnail for %s: %v", workerID, imagePath, err)
+		}
+	}
 }
 
 func respondJSON(w http.ResponseWriter, data interface{}, statusCode int) {
