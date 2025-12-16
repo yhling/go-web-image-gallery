@@ -41,6 +41,14 @@ var imageExtensions = map[string]bool{
 	".png":  true,
 	".heic": true,
 	".HEIC": true,
+	".arw":  true,
+	".ARW":  true,
+	".raw":  true,
+	".RAW":  true,
+	".heif": true,
+	".HEIF": true,
+	".dng":  true,
+	".DNG":  true,
 }
 
 // vipsExecutable returns the path to the vips executable
