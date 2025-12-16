@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"html/template"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -51,13 +53,26 @@ func vipsExecutable() string {
 }
 
 func main() {
-	rootDir := os.Getenv("ROOT_DIR")
-	if rootDir == "" {
-		rootDir = "."
+	// Parse command-line arguments
+	rootDir := flag.String("root", ".", "Root directory to serve (default: current directory)")
+	port := flag.String("port", "8080", "Port to listen on (default: 8080)")
+	flag.Parse()
+
+	// On Windows, add ./bin to PATH
+	if runtime.GOOS == "windows" {
+		binPath, err := filepath.Abs("./bin")
+		if err == nil {
+			currentPath := os.Getenv("PATH")
+			// Prepend binPath to PATH if it's not already there
+			if !strings.Contains(currentPath, binPath) {
+				newPath := binPath + string(filepath.ListSeparator) + currentPath
+				os.Setenv("PATH", newPath)
+			}
+		}
 	}
 
 	// Convert to absolute path
-	absRoot, err := filepath.Abs(rootDir)
+	absRoot, err := filepath.Abs(*rootDir)
 	if err != nil {
 		log.Fatalf("Failed to get absolute path: %v", err)
 	}
@@ -91,13 +106,8 @@ func main() {
 	http.HandleFunc("/api/preview/", server.handlePreview)
 	http.HandleFunc("/static/", server.handleStatic)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	log.Printf("Server starting on port %s, serving directory: %s", port, absRoot)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Printf("Server starting on port %s, serving directory: %s", *port, absRoot)
+	log.Fatal(http.ListenAndServe(":"+*port, nil))
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

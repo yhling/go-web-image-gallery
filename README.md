@@ -1,75 +1,65 @@
-# Directory Browser Server
+# YAIG - Yet Another Image Gallery (with HEIC support!)
 
-A Go web server that displays directories in a grid layout with automatic thumbnail generation for images using libvips.
+A super fast zero-dependency Go based web server that serves your directories as a image gallery.
 
 ## Features
 
-- Web-based directory browser with modern grid layout
-- Automatic thumbnail generation for JPG, PNG, and HEIC images
-- Thumbnails stored in `.small` subdirectories
-- Fast and efficient image processing using libvips
-- Configurable root directory
+- Standalone executable, click to run. No DB, no frameworks to install.
+- Your directory is your gallery
+- Supports JPG, PNG, HEIC, ARW, RAW images.
+- Super fast preview and thumbnail generation using libvips
 
-## Prerequisites
-
-1. **Go** (version 1.21 or later)
-2. **libvips** - Image processing library
-
-### Installing libvips and pkg-config
+### Run prerequisites
 
 **macOS:**
 ```bash
-brew install vips pkg-config
+brew install vips
 ```
 
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install libvips-dev pkg-config
+sudo apt-get install libvips-dev
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install vips-devel pkg-config
+sudo dnf install vips-devel
 ```
 
-## Installation
+**Windows:**
+Just run the .exe
 
-1. Install Go dependencies:
+### Build
+
 ```bash
-go mod download
+go build -o directory-server
 ```
 
 ## Usage
 
-### Set Root Directory
+### Command-Line Arguments
 
-Set the `ROOT_DIR` environment variable to specify the root directory to serve:
+Run the server with command-line arguments:
 
 ```bash
-export ROOT_DIR=/path/to/your/directory
+./directory-server -root /path/to/your/directory -port 8080
 ```
 
-If not set, it defaults to the current directory.
+**Arguments:**
+- `-root`: Root directory to serve (default: current directory)
+- `-port`: Port to listen on (default: 8080)
 
-### Set Port (Optional)
-
-By default, the server runs on port 8080. You can change it with the `PORT` environment variable:
-
-```bash
-export PORT=3000
-```
-
-### Run the Server
+**Examples:**
 
 ```bash
-go run main.go
-```
-
-Or build and run:
-
-```bash
-go build -o directory-server
+# Use default settings (current directory, port 8080)
 ./directory-server
+
+# Specify root directory
+./directory-server -root /path/to/images
+
+# Specify both root directory and port
+./directory-server -root /path/to/images -port 3000
 ```
 
 ### Access the Web Interface
@@ -78,14 +68,6 @@ Open your browser and navigate to:
 ```
 http://localhost:8080
 ```
-
-## How It Works
-
-1. **Directory Listing**: The server reads directories and displays files in a grid layout
-2. **Image Detection**: Automatically detects JPG, PNG, and HEIC files
-3. **Thumbnail Generation**: When an image is accessed, a thumbnail is generated using libvips
-4. **Thumbnail Storage**: Thumbnails are stored as JPG files in a `.small` subdirectory within each directory containing images
-5. **Caching**: Thumbnails are generated once and cached for subsequent requests
 
 ## API Endpoints
 
