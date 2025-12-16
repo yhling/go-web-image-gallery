@@ -7,11 +7,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/cshum/vipsgen/vips"
 )
 
 type Server struct {
@@ -42,8 +41,13 @@ var imageExtensions = map[string]bool{
 	".HEIC": true,
 }
 
-func init() {
-	vips.Startup(nil)
+// vipsExecutable returns the path to the vips executable
+// On Windows, it looks for vips.exe, otherwise just "vips"
+func vipsExecutable() string {
+	if _, err := exec.LookPath("vips.exe"); err == nil {
+		return "vips.exe"
+	}
+	return "vips"
 }
 
 func main() {
@@ -296,44 +300,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load image (for both JPG and non-JPG, we need to resize)
-	img, err := vips.NewImageFromFile(fullPath, nil)
-	if err != nil {
-		http.Error(w, "Failed to load image: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer img.Close()
-
-	// Resize to maximum 1600px on the longest side while maintaining aspect ratio
-	width := img.Width()
-	height := img.Height()
-	maxSize := 1600
-
-	var scale float64
-	if width > height {
-		if width > maxSize {
-			scale = float64(maxSize) / float64(width)
-		} else {
-			scale = 1.0
-		}
-	} else {
-		if height > maxSize {
-			scale = float64(maxSize) / float64(height)
-		} else {
-			scale = 1.0
-		}
-	}
-
-	// Resize image if needed
-	if scale < 1.0 {
-		if err := img.Resize(scale, nil); err != nil {
-			http.Error(w, "Failed to resize image: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Convert to JPEG using temporary file (vipsgen doesn't have direct writer method)
-	// Create temp file
+	// Create temp file for preview
 	tmpFile, err := os.CreateTemp("", "preview-*.jpg")
 	if err != nil {
 		http.Error(w, "Failed to create temp file: "+err.Error(), http.StatusInternalServerError)
@@ -343,9 +310,13 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	// Save as JPEG
-	if err := img.Jpegsave(tmpPath, nil); err != nil {
-		http.Error(w, "Failed to convert image: "+err.Error(), http.StatusInternalServerError)
+	// Use vips thumbnail to resize to max 1600px on longest side and convert to JPEG
+	// vips thumbnail creates a thumbnail on the longest side, which is perfect for previews
+	vipsCmd := vipsExecutable()
+	cmd := exec.Command(vipsCmd, "thumbnail", fullPath, tmpPath, "1600")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		http.Error(w, "Failed to process image: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -420,43 +391,13 @@ func (s *Server) generateThumbnail(imagePath string) error {
 		return fmt.Errorf("failed to create thumbnail directory: %w", err)
 	}
 
-	// Load image with vips
-	img, err := vips.NewImageFromFile(imagePath, nil)
-	if err != nil {
-		return fmt.Errorf("failed to load image: %w", err)
-	}
-	defer img.Close()
-
-	// Calculate thumbnail size (max 300x300, maintain aspect ratio)
-	width := img.Width()
-	height := img.Height()
-	maxSize := 300
-
-	var scale float64
-	if width > height {
-		if width > maxSize {
-			scale = float64(maxSize) / float64(width)
-		} else {
-			scale = 1.0
-		}
-	} else {
-		if height > maxSize {
-			scale = float64(maxSize) / float64(height)
-		} else {
-			scale = 1.0
-		}
-	}
-
-	// Resize image if needed
-	if scale < 1.0 {
-		if err := img.Resize(scale, nil); err != nil {
-			return fmt.Errorf("failed to resize image: %w", err)
-		}
-	}
-
-	// Save as JPEG directly
-	if err := img.Jpegsave(thumbnailPath, nil); err != nil {
-		return fmt.Errorf("failed to save thumbnail: %w", err)
+	// Use vips thumbnail command which is optimized for creating thumbnails
+	// vips thumbnail input.jpg output.jpg 300 (creates 300px thumbnail on longest side)
+	vipsCmd := vipsExecutable()
+	cmd := exec.Command(vipsCmd, "thumbnail", imagePath, thumbnailPath, "300")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate thumbnail: %w", err)
 	}
 
 	return nil
