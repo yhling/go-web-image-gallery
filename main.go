@@ -18,6 +18,7 @@ import (
 
 type Server struct {
 	rootDir             string
+	basePath            string
 	indexTmpl           *template.Template
 	imageThumbnailQueue chan string
 	movieThumbnailQueue chan string
@@ -77,6 +78,18 @@ func vipsExecutable() string {
 	return "vips"
 }
 
+// urlWithBasePath prepends the base path to a URL path
+func (s *Server) urlWithBasePath(path string) string {
+	if s.basePath == "" {
+		return path
+	}
+	// Ensure path starts with /
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return s.basePath + path
+}
+
 // getThumbnailPath returns the thumbnail path for a given image path
 // The thumbnail filename includes the original extension to avoid conflicts
 // between files with the same base name but different extensions
@@ -94,6 +107,7 @@ func main() {
 	// Parse command-line arguments
 	rootDir := flag.String("root", ".", "Root directory to serve (default: current directory)")
 	port := flag.String("port", "8080", "Port to listen on (default: 8080)")
+	basePath := flag.String("base-path", "", "Base path for the application (e.g., /gallery)")
 	flag.Parse()
 
 	// On Windows, add ./bin to PATH
@@ -127,8 +141,18 @@ func main() {
 	numImageWorkers := 2 // Limit concurrent image thumbnail generations to prevent memory issues
 	numMovieWorkers := 1 // Limit concurrent movie thumbnail generations (movies are more resource-intensive)
 
+	// Normalize base path: ensure it starts with / and ends without /
+	normalizedBasePath := *basePath
+	if normalizedBasePath != "" {
+		if !strings.HasPrefix(normalizedBasePath, "/") {
+			normalizedBasePath = "/" + normalizedBasePath
+		}
+		normalizedBasePath = strings.TrimSuffix(normalizedBasePath, "/")
+	}
+
 	server := &Server{
 		rootDir:             absRoot,
+		basePath:            normalizedBasePath,
 		indexTmpl:           tmpl,
 		imageThumbnailQueue: make(chan string, queueSize),
 		movieThumbnailQueue: make(chan string, queueSize),
@@ -158,7 +182,10 @@ func main() {
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.indexTmpl.Execute(w, nil); err != nil {
+	templateData := map[string]string{
+		"BasePath": s.basePath,
+	}
+	if err := s.indexTmpl.Execute(w, templateData); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -232,7 +259,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			if !strings.HasPrefix(thumbPath, "/") {
 				thumbPath = "/" + thumbPath
 			}
-			fileInfo.Thumbnail = "/api/thumbnail" + thumbPath
+			fileInfo.Thumbnail = s.urlWithBasePath("/api/thumbnail" + thumbPath)
 			// Thumbnail will be generated on-demand when client requests it
 		}
 

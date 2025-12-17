@@ -433,6 +433,19 @@
         <div class="modal-info" id="modalInfo"></div>
     </div>
     <script>
+        // Base path from server
+        const basePath = {{if .BasePath}}'{{.BasePath | js}}'{{else}}''{{end}};
+        
+        // Helper function to prepend base path to URLs
+        function urlWithBasePath(path) {
+            if (!basePath) return path;
+            // Ensure path starts with /
+            if (!path.startsWith('/')) {
+                path = '/' + path;
+            }
+            return basePath + path;
+        }
+        
         const currentPath = new URLSearchParams(window.location.search).get('path') || '';
         
         // Store image files for navigation
@@ -547,7 +560,7 @@
             updateBreadcrumb(path);
             document.getElementById('content').innerHTML = '<div class="loading">Loading directory...</div>';
             
-            fetch('/api/list?path=' + encodeURIComponent(path))
+            fetch(urlWithBasePath('/api/list?path=' + encodeURIComponent(path)))
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
@@ -590,7 +603,7 @@
                         } else if (file.isDir) {
                             item.href = '?path=' + encodeURIComponent(file.path);
                         } else {
-                            item.href = '/static/' + encodeURIComponent(file.path);
+                            item.href = urlWithBasePath('/static/' + encodeURIComponent(file.path));
                         }
                         
                         if ((file.isImage || file.isMovie) && file.thumbnail) {
@@ -692,7 +705,7 @@
             }
             
             const img = new Image();
-            img.src = '/api/preview/' + encodeURIComponent(imagePath);
+            img.src = urlWithBasePath('/api/preview/' + encodeURIComponent(imagePath));
             preloadedImages.set(imagePath, img);
         }
         
@@ -750,7 +763,7 @@
             document.body.classList.add('modal-open');
             
             // Check if image is already preloaded
-            const newSrc = '/api/preview/' + encodeURIComponent(imagePath);
+            const newSrc = urlWithBasePath('/api/preview/' + encodeURIComponent(imagePath));
             const preloadedImg = preloadedImages.get(imagePath);
             
             if (preloadedImg && preloadedImg.complete) {
@@ -794,7 +807,7 @@
             modalVideo.classList.remove('hidden');
             
             // Set video source
-            const videoSrc = '/static/' + encodeURIComponent(currentImageFile.canonicalMovie);
+            const videoSrc = urlWithBasePath('/static/' + encodeURIComponent(currentImageFile.canonicalMovie));
             modalVideo.src = videoSrc;
             
             // Update info to show we're playing the movie

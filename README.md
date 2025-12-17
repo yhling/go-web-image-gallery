@@ -47,6 +47,7 @@ Run the server with command-line arguments:
 **Arguments:**
 - `-root`: Root directory to serve (default: current directory)
 - `-port`: Port to listen on (default: 8080)
+- `-base-path`: Base path for the application when behind a reverse proxy (e.g., `/gallery`) (default: empty)
 
 **Examples:**
 
@@ -59,6 +60,9 @@ Run the server with command-line arguments:
 
 # Specify both root directory and port
 ./directory-server -root /path/to/images -port 3000
+
+# Use with base path for reverse proxy (e.g., nginx)
+./directory-server -root /path/to/images -port 8080 -base-path /gallery
 ```
 
 ### Access the Web Interface
