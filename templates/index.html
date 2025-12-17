@@ -749,12 +749,10 @@
             modalVideo.src = '';
             modalImg.classList.remove('hidden');
             
-            // Clear previous image immediately to prevent showing old image
-            modalImg.src = '';
-            
-            // Find the current image file to check for canonical movie
+            // Find the current image file to check for canonical movie and get thumbnail
             const currentImageFile = imageFiles[currentImageIndex];
             const hasCanonicalMovie = currentImageFile && currentImageFile.canonicalMovie;
+            const thumbnailSrc = currentImageFile && currentImageFile.thumbnail ? currentImageFile.thumbnail : '';
             
             // Show/hide play button based on whether there's a canonical movie
             if (hasCanonicalMovie) {
@@ -785,20 +783,66 @@
                 // Preload adjacent images after showing current one
                 setTimeout(preloadAdjacentImages, 100);
             } else {
-                // Load new image
-                modalImg.onload = () => {
-                    modalLoading.style.display = 'none';
-                    // Preload adjacent images after current image loads
-                    preloadAdjacentImages();
-                };
+                // Function to load preview image
+                function loadPreviewImage() {
+                    // Create a new image element to preload the preview
+                    const previewImg = new Image();
+                    
+                    previewImg.onload = () => {
+                        // Preview image loaded, replace thumbnail with preview
+                        modalImg.src = newSrc;
+                        // Preload adjacent images after current image loads
+                        preloadAdjacentImages();
+                    };
+                    
+                    previewImg.onerror = () => {
+                        modalLoading.style.display = 'block';
+                        modalLoading.textContent = 'Failed to load image';
+                        modalLoading.style.color = '#f33';
+                    };
+                    
+                    // Start loading the preview image
+                    previewImg.src = newSrc;
+                }
                 
-                modalImg.onerror = () => {
-                    modalLoading.textContent = 'Failed to load image';
-                    modalLoading.style.color = '#f33';
-                };
-                
-                // Set the new source (this will trigger onload)
-                modalImg.src = newSrc;
+                // First, show thumbnail if available
+                if (thumbnailSrc) {
+                    let thumbnailLoaded = false;
+                    
+                    // Set up event handlers before setting src to catch cached images
+                    const thumbnailOnLoad = function() {
+                        if (thumbnailLoaded) return; // Prevent double execution
+                        thumbnailLoaded = true;
+                        modalLoading.style.display = 'none';
+                        // Remove this handler to avoid conflicts
+                        modalImg.removeEventListener('load', thumbnailOnLoad);
+                        // Now load the preview image in the background
+                        loadPreviewImage();
+                    };
+                    modalImg.addEventListener('load', thumbnailOnLoad, { once: true });
+                    
+                    // If thumbnail fails to load, still try to load preview
+                    const thumbnailOnError = function() {
+                        modalImg.removeEventListener('error', thumbnailOnError);
+                        loadPreviewImage();
+                    };
+                    modalImg.addEventListener('error', thumbnailOnError, { once: true });
+                    
+                    // Set thumbnail src (this will trigger load event if cached)
+                    modalImg.src = thumbnailSrc;
+                    
+                    // Check if thumbnail is already loaded (cached) - check after setting src
+                    // Use setTimeout to check after any synchronous load events have fired
+                    setTimeout(() => {
+                        if (!thumbnailLoaded && modalImg.complete && modalImg.naturalWidth > 0) {
+                            // Thumbnail already loaded but event didn't fire, trigger manually
+                            thumbnailOnLoad();
+                        }
+                    }, 0);
+                } else {
+                    // No thumbnail, load preview directly
+                    loadPreviewImage();
+                }
             }
         }
         
