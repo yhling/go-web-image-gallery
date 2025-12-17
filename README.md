@@ -1,35 +1,34 @@
-# YAIG - Yet Another Image Gallery (with HEIC support!)
+# YAIG - Yet Another Image Gallery
 
-A super fast zero-dependency Go based web server that serves your directories as a image gallery.
+A super fast zero-dependency Go based web server that turns your directories into a image gallery. Making it iCloud-like.
 
 ## Features
 
-- Standalone executable, click to run. No DB, no frameworks to install.
-- Your directory is your gallery
-- Supports JPG, PNG, HEIC, ARW, RAW images.
-- Super fast preview and thumbnail generation using libvips
+- Standalone executable. No DB, no frameworks, no containers.
+- Supports previewing almost every image format (including HEIC, DNG, ARW). Video playback depends on browser.
+- Fast preview and thumbnail generation
 
 ### Run prerequisites
 
+**Windows:**
+Download and run the .exe
+
 **macOS:**
 ```bash
-brew install vips
-```
+brew install vips ffmpeg
 
+```
 **Ubuntu/Debian:**
 ```bash
-sudo apt-get install libvips-dev
+sudo apt-get install libvips-dev ffmpeg
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install vips-devel
+sudo dnf install vips-devel ffmpeg
 ```
 
-**Windows:**
-Just run the .exe
-
-### Build
+### Build (for Mac/Linux)
 
 ```bash
 go build -o directory-server
