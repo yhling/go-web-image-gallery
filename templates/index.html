@@ -461,6 +461,8 @@
         let imageFiles = [];
         let currentImageIndex = -1;
         let arrowHideTimeout = null;
+        let currentPreviewImage = null; // Track current preview image being loaded
+        let currentImagePath = null; // Track current image path to prevent race conditions
         
         // Create a single Intersection Observer for all images
         let imageObserver = null;
@@ -740,6 +742,17 @@
             const modalLoading = document.getElementById('modalLoading');
             const modalPlayButton = document.getElementById('modalPlayButton');
             
+            // Cancel any existing preview image loading
+            if (currentPreviewImage) {
+                currentPreviewImage.onload = null;
+                currentPreviewImage.onerror = null;
+                currentPreviewImage.src = ''; // Cancel loading
+                currentPreviewImage = null;
+            }
+            
+            // Update current image path to track which image we're loading
+            currentImagePath = imagePath;
+            
             // Reset zoom when showing new image
             resetZoom();
             
@@ -785,20 +798,36 @@
             } else {
                 // Function to load preview image
                 function loadPreviewImage() {
+                    // Check if we're still loading the same image (user might have navigated away)
+                    if (currentImagePath !== imagePath) {
+                        return; // User navigated to different image, cancel this load
+                    }
+                    
                     // Create a new image element to preload the preview
                     const previewImg = new Image();
+                    currentPreviewImage = previewImg; // Track this preview image
                     
                     previewImg.onload = () => {
+                        // Check again if we're still on the same image before updating
+                        if (currentImagePath !== imagePath) {
+                            return; // User navigated away, don't update
+                        }
                         // Preview image loaded, replace thumbnail with preview
                         modalImg.src = newSrc;
                         // Preload adjacent images after current image loads
                         preloadAdjacentImages();
+                        currentPreviewImage = null; // Clear tracking
                     };
                     
                     previewImg.onerror = () => {
+                        // Check if we're still on the same image before showing error
+                        if (currentImagePath !== imagePath) {
+                            return; // User navigated away, don't show error
+                        }
                         modalLoading.style.display = 'block';
                         modalLoading.textContent = 'Failed to load image';
                         modalLoading.style.color = '#f33';
+                        currentPreviewImage = null; // Clear tracking
                     };
                     
                     // Start loading the preview image
