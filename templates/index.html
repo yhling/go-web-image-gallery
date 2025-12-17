@@ -294,9 +294,18 @@
             height: 100%;
             object-fit: contain;
             z-index: 1001;
+            transition: transform 0.1s ease-out;
+            transform-origin: center center;
+            will-change: transform;
         }
         .modal-content.hidden {
             display: none;
+        }
+        .modal-content.zoomed {
+            cursor: grab;
+        }
+        .modal-content.zoomed:active {
+            cursor: grabbing;
         }
         .modal-loading {
             position: absolute;
@@ -731,6 +740,9 @@
             const modalLoading = document.getElementById('modalLoading');
             const modalPlayButton = document.getElementById('modalPlayButton');
             
+            // Reset zoom when showing new image
+            resetZoom();
+            
             // Hide video and show image (image is on top of video)
             modalVideo.classList.add('hidden');
             modalVideo.pause();
@@ -800,6 +812,9 @@
             const modalVideo = document.getElementById('modalVideo');
             const modalPlayButton = document.getElementById('modalPlayButton');
             const modalInfo = document.getElementById('modalInfo');
+            
+            // Reset zoom when playing live
+            resetZoom();
             
             // Hide image and play button, show video
             modalImg.classList.add('hidden');
@@ -896,6 +911,75 @@
             }, 1000);
         }
         
+        // Pinch-to-zoom state variables (global scope)
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchEndX = 0;
+        let touchEndY = 0;
+        let isSwiping = false;
+        let isPinching = false;
+        let initialDistance = 0;
+        let initialScale = 1;
+        let currentScale = 1;
+        let currentTranslateX = 0;
+        let currentTranslateY = 0;
+        let lastTouchCenterX = 0;
+        let lastTouchCenterY = 0;
+        const minSwipeDistance = 50; // Minimum distance in pixels to register a swipe
+        const minPinchDistance = 10; // Minimum distance change to register pinch
+        const minScale = 1;
+        const maxScale = 5;
+        
+        function getDistance(touch1, touch2) {
+            const dx = touch2.clientX - touch1.clientX;
+            const dy = touch2.clientY - touch1.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+        
+        function getCenter(touch1, touch2) {
+            return {
+                x: (touch1.clientX + touch2.clientX) / 2,
+                y: (touch1.clientY + touch2.clientY) / 2
+            };
+        }
+        
+        function resetZoom() {
+            const modalImg = document.getElementById('modalImage');
+            currentScale = 1;
+            currentTranslateX = 0;
+            currentTranslateY = 0;
+            modalImg.style.transform = 'scale(1) translate(0, 0)';
+            modalImg.classList.remove('zoomed');
+        }
+        
+        function applyTransform() {
+            const modalImg = document.getElementById('modalImage');
+            modalImg.style.transform = `scale(${currentScale}) translate(${currentTranslateX}px, ${currentTranslateY}px)`;
+            if (currentScale > 1) {
+                modalImg.classList.add('zoomed');
+            } else {
+                modalImg.classList.remove('zoomed');
+            }
+        }
+        
+        function constrainTranslate() {
+            const modalImg = document.getElementById('modalImage');
+            const rect = modalImg.getBoundingClientRect();
+            // getBoundingClientRect() already includes the transform, so rect.width/height are already scaled
+            const scaledWidth = rect.width;
+            const scaledHeight = rect.height;
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            
+            // Calculate max translate to keep image within bounds
+            const maxTranslateX = Math.max(0, (scaledWidth - viewportWidth) / 2);
+            const maxTranslateY = Math.max(0, (scaledHeight - viewportHeight) / 2);
+            
+            // Constrain translation
+            currentTranslateX = Math.max(-maxTranslateX, Math.min(maxTranslateX, currentTranslateX));
+            currentTranslateY = Math.max(-maxTranslateY, Math.min(maxTranslateY, currentTranslateY));
+        }
+        
         // Setup modal event handlers (only once)
         (function setupModalHandlers() {
             const modal = document.getElementById('imageModal');
@@ -929,6 +1013,7 @@
             modalClose.onclick = function() {
                 modal.classList.remove('active');
                 document.body.classList.remove('modal-open');
+                resetZoom();
                 if (arrowHideTimeout) {
                     clearTimeout(arrowHideTimeout);
                 }
@@ -939,6 +1024,7 @@
                 if (e.target === modal) {
                     modal.classList.remove('active');
                     document.body.classList.remove('modal-open');
+                    resetZoom();
                     if (arrowHideTimeout) {
                         clearTimeout(arrowHideTimeout);
                     }
@@ -952,6 +1038,7 @@
                 if (e.key === 'Escape') {
                     modal.classList.remove('active');
                     document.body.classList.remove('modal-open');
+                    resetZoom();
                     if (arrowHideTimeout) {
                         clearTimeout(arrowHideTimeout);
                     }
@@ -969,60 +1056,154 @@
             //    }
             //});
             
-            // Touch swipe navigation
-            let touchStartX = 0;
-            let touchStartY = 0;
-            let touchEndX = 0;
-            let touchEndY = 0;
-            let isSwiping = false;
-            const minSwipeDistance = 50; // Minimum distance in pixels to register a swipe
-            
             modal.addEventListener('touchstart', function(e) {
                 if (!modal.classList.contains('active')) return;
-                // Prevent background scrolling
                 e.stopPropagation();
-                touchStartX = e.touches[0].clientX;
-                touchStartY = e.touches[0].clientY;
-                isSwiping = true;
+                
+                // Ignore zoom gestures when video is visible
+                const modalVideo = document.getElementById('modalVideo');
+                const isVideoVisible = !modalVideo.classList.contains('hidden');
+                
+                // Check if we have two touches (pinch gesture)
+                if (e.touches.length === 2) {
+                    // Ignore pinch gestures when video is visible
+                    if (isVideoVisible) {
+                        return;
+                    }
+                    isPinching = true;
+                    isSwiping = false;
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    initialDistance = getDistance(touch1, touch2);
+                    initialScale = currentScale;
+                    const center = getCenter(touch1, touch2);
+                    lastTouchCenterX = center.x;
+                    lastTouchCenterY = center.y;
+                    e.preventDefault();
+                } else if (e.touches.length === 1) {
+                    // Single touch
+                    touchStartX = e.touches[0].clientX;
+                    touchStartY = e.touches[0].clientY;
+                    // If zoomed, prepare for panning; otherwise prepare for swipe
+                    // But ignore panning when video is visible
+                    if (currentScale > 1 && !isVideoVisible) {
+                        isSwiping = false;
+                    } else {
+                        isSwiping = true;
+                    }
+                }
             }, { passive: false });
             
             modal.addEventListener('touchmove', function(e) {
-                if (!modal.classList.contains('active') || !isSwiping) return;
-                // Prevent background scrolling during swipe
-                e.preventDefault();
+                if (!modal.classList.contains('active')) return;
                 e.stopPropagation();
+                
+                // Ignore zoom gestures when video is visible
+                const modalVideo = document.getElementById('modalVideo');
+                const isVideoVisible = !modalVideo.classList.contains('hidden');
+                
+                // Handle pinch gesture (takes priority)
+                if (e.touches.length === 2 && isPinching) {
+                    // Ignore pinch gestures when video is visible
+                    if (isVideoVisible) {
+                        return;
+                    }
+                    e.preventDefault();
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    const currentDistance = getDistance(touch1, touch2);
+                    const scaleChange = currentDistance / initialDistance;
+                    const newScale = Math.max(minScale, Math.min(maxScale, initialScale * scaleChange));
+                    
+                    // Calculate center of pinch
+                    const center = getCenter(touch1, touch2);
+                    const centerDeltaX = center.x - lastTouchCenterX;
+                    const centerDeltaY = center.y - lastTouchCenterY;
+                    
+                    // Update scale and translate
+                    currentScale = newScale;
+                    currentTranslateX += centerDeltaX / currentScale;
+                    currentTranslateY += centerDeltaY / currentScale;
+                    
+                    // Constrain translation
+                    constrainTranslate();
+                    applyTransform();
+                    
+                    lastTouchCenterX = center.x;
+                    lastTouchCenterY = center.y;
+                } 
+                // Handle panning when zoomed (single touch on zoomed image)
+                else if (e.touches.length === 1 && currentScale > 1) {
+                    // Ignore panning when video is visible
+                    if (isVideoVisible) {
+                        return;
+                    }
+                    e.preventDefault();
+                    const touch = e.touches[0];
+                    const deltaX = touch.clientX - touchStartX;
+                    const deltaY = touch.clientY - touchStartY;
+                    
+                    currentTranslateX += deltaX / currentScale;
+                    currentTranslateY += deltaY / currentScale;
+                    
+                    constrainTranslate();
+                    applyTransform();
+                    
+                    touchStartX = touch.clientX;
+                    touchStartY = touch.clientY;
+                }
+                // Handle swipe (only if not pinching and not zoomed)
+                else if (e.touches.length === 1 && isSwiping && !isPinching && currentScale <= 1) {
+                    e.preventDefault();
+                }
             }, { passive: false });
             
             modal.addEventListener('touchend', function(e) {
-                if (!modal.classList.contains('active') || !isSwiping) return;
+                if (!modal.classList.contains('active')) return;
                 e.stopPropagation();
-                isSwiping = false;
                 
-                touchEndX = e.changedTouches[0].clientX;
-                touchEndY = e.changedTouches[0].clientY;
-                
-                const deltaX = touchEndX - touchStartX;
-                const deltaY = touchEndY - touchStartY;
-                const absDeltaX = Math.abs(deltaX);
-                const absDeltaY = Math.abs(deltaY);
-                
-                // Check if it's a vertical swipe (more vertical than horizontal)
-                if (absDeltaY > absDeltaX && absDeltaY > minSwipeDistance) {
-                    // Swipe up or down - dismiss modal
-                    modal.classList.remove('active');
-                    document.body.classList.remove('modal-open');
-                    if (arrowHideTimeout) {
-                        clearTimeout(arrowHideTimeout);
+                // Reset pinch state if we have less than 2 touches
+                if (e.touches.length < 2) {
+                    isPinching = false;
+                    // If transitioning from pinch to single touch, update touch start position
+                    // to the remaining finger's position to prevent pan snapping
+                    if (e.touches.length === 1 && currentScale > 1) {
+                        touchStartX = e.touches[0].clientX;
+                        touchStartY = e.touches[0].clientY;
                     }
                 }
-                // Check if it's a horizontal swipe (more horizontal than vertical)
-                else if (absDeltaX > absDeltaY && absDeltaX > minSwipeDistance) {
-                    if (deltaX > 0) {
-                        // Swipe right - go to previous image
-                        navigateImage('prev');
-                    } else {
-                        // Swipe left - go to next image
-                        navigateImage('next');
+                
+                // Handle swipe end (only if not pinching and not zoomed)
+                if (e.touches.length === 0 && isSwiping && !isPinching && currentScale <= 1 && e.changedTouches.length > 0) {
+                    isSwiping = false;
+                    
+                    touchEndX = e.changedTouches[0].clientX;
+                    touchEndY = e.changedTouches[0].clientY;
+                    
+                    const deltaX = touchEndX - touchStartX;
+                    const deltaY = touchEndY - touchStartY;
+                    const absDeltaX = Math.abs(deltaX);
+                    const absDeltaY = Math.abs(deltaY);
+                    
+                    // Check if it's a vertical swipe (more vertical than horizontal)
+                    if (absDeltaY > absDeltaX && absDeltaY > minSwipeDistance) {
+                        // Swipe up or down - dismiss modal
+                        modal.classList.remove('active');
+                        document.body.classList.remove('modal-open');
+                        resetZoom();
+                        if (arrowHideTimeout) {
+                            clearTimeout(arrowHideTimeout);
+                        }
+                    }
+                    // Check if it's a horizontal swipe (more horizontal than vertical)
+                    else if (absDeltaX > absDeltaY && absDeltaX > minSwipeDistance) {
+                        if (deltaX > 0) {
+                            // Swipe right - go to previous image
+                            navigateImage('prev');
+                        } else {
+                            // Swipe left - go to next image
+                            navigateImage('next');
+                        }
                     }
                 }
             }, { passive: false });
@@ -1030,6 +1211,7 @@
             modal.addEventListener('touchcancel', function(e) {
                 if (!modal.classList.contains('active')) return;
                 isSwiping = false;
+                isPinching = false;
                 e.stopPropagation();
             }, { passive: false });
         })();
