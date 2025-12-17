@@ -22,7 +22,6 @@
         .header {
             background: white;
             padding: 20px;
-            border-radius: 8px;
             margin-bottom: 20px;
             border: 1px solid #ddd;
         }
@@ -49,7 +48,6 @@
         }
         .item {
             background: white;
-            border-radius: 8px;
             overflow: hidden;
             border: 1px solid #ddd;
             transition: transform 0.2s, border-color 0.2s;
@@ -86,6 +84,26 @@
             width: 100%;
             height: 200px;
         }
+        .play-icon-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 30px;
+            height: 30px;
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .play-icon-overlay::before {
+            content: '▶';
+            color: white;
+            font-size: 24px;
+            margin-left: 4px;
+        }
         .item-icon {
             width: 100%;
             height: 200px;
@@ -110,9 +128,6 @@
                 grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
                 gap: 8px;
             }
-            .item {
-                border-radius: 4px;
-            }
             .item-image-container {
                 height: 100px;
             }
@@ -128,9 +143,15 @@
             .item-image-type .item-info {
                 display: none;
             }
+            .item-movie .item-info {
+                display: none;
+            }
             .item-info {
                 padding: 6px;
                 font-size: 11px;
+            }
+            .modal-info {
+                display: none;
             }
         }
         @media (max-width: 480px) {
@@ -164,7 +185,6 @@
             background: #fee;
             color: #c33;
             padding: 15px;
-            border-radius: 8px;
             margin: 20px 0;
         }
         .modal {
@@ -193,9 +213,16 @@
             to { opacity: 1; }
         }
         .modal-content {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
             height: 100%;
             object-fit: contain;
+            z-index: 1001;
+        }
+        .modal-content.hidden {
+            display: none;
         }
         .modal-loading {
             position: absolute;
@@ -204,18 +231,18 @@
             transform: translate(-50%, -50%);
             color: #f1f1f1;
             font-size: 18px;
-            z-index: 1002;
+            z-index: 1003;
         }
         .modal-close {
             position: absolute;
-            top: 20px;
+            top: 8px;
             right: 35px;
             color: #f1f1f1;
             font-size: 40px;
             font-weight: bold;
             cursor: pointer;
             transition: color 0.3s;
-            z-index: 1001;
+            z-index: 1002;
         }
         .modal-close:hover {
             color: #fff;
@@ -223,13 +250,12 @@
         .modal-info {
             position: absolute;
             bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
             color: #f1f1f1;
             background: rgba(0, 0, 0, 0.7);
             padding: 10px 20px;
-            border-radius: 4px;
             font-size: 14px;
+            z-index: 1002;
+            text-align: center;
         }
         .modal-arrow {
             position: absolute;
@@ -240,7 +266,7 @@
             font-weight: bold;
             cursor: pointer;
             transition: opacity 0.3s, color 0.3s;
-            z-index: 1001;
+            z-index: 1002;
             padding: 20px;
             user-select: none;
             opacity: 1;
@@ -263,6 +289,46 @@
             cursor: not-allowed;
             pointer-events: none;
         }
+        .modal-play-button {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #f1f1f1;
+            border: 1px solid #f1f1f1;
+            padding: 6px 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 1002;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+        }
+        .modal-play-button:hover {
+            background: rgba(0, 0, 0, 0.9);
+            border-color: #fff;
+        }
+        .modal-play-button.hidden {
+            display: none;
+        }
+        .modal-play-button::before {
+            content: '▶';
+            font-size: 10px;
+        }
+        .modal-video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            z-index: 1000;
+        }
+        .modal-video.hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -280,6 +346,8 @@
         <div class="modal-arrow modal-arrow-left" id="modalArrowLeft">‹</div>
         <div class="modal-arrow modal-arrow-right" id="modalArrowRight">›</div>
         <div class="modal-loading" id="modalLoading">Loading...</div>
+        <div class="modal-play-button hidden" id="modalPlayButton" title="Play live">play live</div>
+        <video class="modal-video hidden" id="modalVideo" playsinline webkit-playsinline></video>
         <img class="modal-content" id="modalImage" src="" alt="">
         <div class="modal-info" id="modalInfo"></div>
     </div>
@@ -331,6 +399,57 @@
             document.getElementById('breadcrumb').innerHTML = breadcrumb || '<a href="?">Home</a>';
         }
         
+        // Helper function to get base name without extension (case-insensitive)
+        function getBaseName(filename) {
+            const lastDot = filename.lastIndexOf('.');
+            if (lastDot === -1) return filename.toLowerCase();
+            return filename.substring(0, lastDot).toLowerCase();
+        }
+        
+        // Helper function to check if a file is a movie
+        function isMovieFile(filename) {
+            const ext = filename.substring(filename.lastIndexOf('.')).toLowerCase();
+            return ['.mov', '.mp4', '.avi', '.mkv'].includes(ext);
+        }
+        
+        // Client-side detection of canonical movies
+        function processFilesForCanonicalMovies(files) {
+            // Create a map of base names (lowercase) to files
+            const baseNameMap = new Map();
+            
+            // First pass: index all files by base name (case-insensitive)
+            files.forEach(file => {
+                const baseName = getBaseName(file.name);
+                if (!baseNameMap.has(baseName)) {
+                    baseNameMap.set(baseName, []);
+                }
+                baseNameMap.get(baseName).push(file);
+            });
+            
+            // Second pass: identify canonical movies and link them to images
+            const canonicalMoviePaths = new Set();
+            
+            files.forEach(file => {
+                if (file.isImage) {
+                    const baseName = getBaseName(file.name);
+                    const relatedFiles = baseNameMap.get(baseName) || [];
+                    
+                    // Find a movie file with the same base name (case-insensitive)
+                    const canonicalMovie = relatedFiles.find(f => 
+                        f.path !== file.path && isMovieFile(f.name)
+                    );
+                    
+                    if (canonicalMovie) {
+                        file.canonicalMovie = canonicalMovie.path;
+                        canonicalMoviePaths.add(canonicalMovie.path);
+                    }
+                }
+            });
+            
+            // Filter out canonical movies from the display
+            return files.filter(file => !canonicalMoviePaths.has(file.path));
+        }
+        
         function loadDirectory(path) {
             updateBreadcrumb(path);
             document.getElementById('content').innerHTML = '<div class="loading">Loading directory...</div>';
@@ -344,17 +463,26 @@
                         return;
                     }
                     
-                    // Store image files for navigation
-                    imageFiles = data.files.filter(file => file.isImage);
+                    // Process files to detect canonical movies client-side
+                    const processedFiles = processFilesForCanonicalMovies(data.files);
+                    
+                    // Store image files for navigation (with canonical movie info)
+                    imageFiles = processedFiles.filter(file => file.isImage);
+                    
+                    // Files to show (canonical movies already filtered out)
+                    const filesToShow = processedFiles;
                     
                     const grid = document.createElement('div');
                     grid.className = 'grid';
                     
-                    data.files.forEach((file, fileIndex) => {
+                    filesToShow.forEach((file, fileIndex) => {
                         const item = document.createElement('a');
                         item.className = 'item';
                         if (file.isImage) {
                             item.classList.add('item-image-type');
+                        }
+                        if (file.isMovie) {
+                            item.classList.add('item-movie');
                         }
                         
                         if (file.isImage) {
@@ -372,7 +500,7 @@
                             item.href = '/static/' + encodeURIComponent(file.path);
                         }
                         
-                        if (file.isImage && file.thumbnail) {
+                        if ((file.isImage || file.isMovie) && file.thumbnail) {
                             // Create container for image and placeholder
                             const imageContainer = document.createElement('div');
                             imageContainer.className = 'item-image-container';
@@ -406,6 +534,14 @@
                             }
                             
                             imageContainer.appendChild(img);
+                            
+                            // Add play icon overlay for movies
+                            if (file.isMovie) {
+                                const playIcon = document.createElement('div');
+                                playIcon.className = 'play-icon-overlay';
+                                imageContainer.appendChild(playIcon);
+                            }
+                            
                             item.appendChild(imageContainer);
                         } else if (file.isDir) {
                             const icon = document.createElement('div');
@@ -449,17 +585,8 @@
             currentImageIndex = imageIndex;
             const imageFile = imageFiles[imageIndex];
             
-            // Preload adjacent images immediately (before showing current)
-            if (imageIndex < imageFiles.length - 1) {
-                const nextImage = imageFiles[imageIndex + 1];
-                preloadImage(nextImage.path);
-            }
-            if (imageIndex > 0) {
-                const prevImage = imageFiles[imageIndex - 1];
-                preloadImage(prevImage.path);
-            }
-            
             showImageInModal(imageFile.path, imageFile.name);
+            resetArrowHideTimeout();
         }
         
         // Preload images for smoother navigation
@@ -493,12 +620,30 @@
         function showImageInModal(imagePath, imageName) {
             const modal = document.getElementById('imageModal');
             const modalImg = document.getElementById('modalImage');
+            const modalVideo = document.getElementById('modalVideo');
             const modalInfo = document.getElementById('modalInfo');
             const modalLoading = document.getElementById('modalLoading');
+            const modalPlayButton = document.getElementById('modalPlayButton');
+            
+            // Hide video and show image (image is on top of video)
+            modalVideo.classList.add('hidden');
+            modalVideo.pause();
+            modalVideo.src = '';
+            modalImg.classList.remove('hidden');
             
             // Clear previous image immediately to prevent showing old image
             modalImg.src = '';
-            modalImg.style.display = 'none';
+            
+            // Find the current image file to check for canonical movie
+            const currentImageFile = imageFiles[currentImageIndex];
+            const hasCanonicalMovie = currentImageFile && currentImageFile.canonicalMovie;
+            
+            // Show/hide play button based on whether there's a canonical movie
+            if (hasCanonicalMovie) {
+                modalPlayButton.classList.remove('hidden');
+            } else {
+                modalPlayButton.classList.add('hidden');
+            }
             
             // Show loading indicator
             modalLoading.style.display = 'block';
@@ -511,9 +656,6 @@
             modal.classList.add('active');
             document.body.classList.add('modal-open');
             
-            // Show arrows initially
-            showArrows();
-            
             // Check if image is already preloaded
             const newSrc = '/api/preview/' + encodeURIComponent(imagePath);
             const preloadedImg = preloadedImages.get(imagePath);
@@ -521,14 +663,12 @@
             if (preloadedImg && preloadedImg.complete) {
                 // Image is already loaded, use it immediately
                 modalImg.src = newSrc;
-                modalImg.style.display = 'block';
                 modalLoading.style.display = 'none';
                 // Preload adjacent images after showing current one
                 setTimeout(preloadAdjacentImages, 100);
             } else {
                 // Load new image
                 modalImg.onload = () => {
-                    modalImg.style.display = 'block';
                     modalLoading.style.display = 'none';
                     // Preload adjacent images after current image loads
                     preloadAdjacentImages();
@@ -542,6 +682,63 @@
                 // Set the new source (this will trigger onload)
                 modalImg.src = newSrc;
             }
+        }
+        
+        function playCanonicalMovie() {
+            const currentImageFile = imageFiles[currentImageIndex];
+            if (!currentImageFile || !currentImageFile.canonicalMovie) {
+                return;
+            }
+            
+            const modalImg = document.getElementById('modalImage');
+            const modalVideo = document.getElementById('modalVideo');
+            const modalPlayButton = document.getElementById('modalPlayButton');
+            const modalInfo = document.getElementById('modalInfo');
+            
+            // Hide image and play button, show video
+            modalImg.classList.add('hidden');
+            modalPlayButton.classList.add('hidden');
+            modalVideo.classList.remove('hidden');
+            
+            // Set video source
+            const videoSrc = '/static/' + encodeURIComponent(currentImageFile.canonicalMovie);
+            modalVideo.src = videoSrc;
+            
+            // Update info to show we're playing the movie
+            const imageName = currentImageFile.name;
+            const imageCount = imageFiles.length;
+            modalInfo.textContent = `Playing: ${imageName} (${currentImageIndex + 1} / ${imageCount})`;
+            
+            // Play the video
+            modalVideo.play().catch(err => {
+                console.error('Failed to play video:', err);
+                modalInfo.textContent = 'Failed to play video';
+            });
+        }
+        
+        function showImageFromVideo() {
+            const modalImg = document.getElementById('modalImage');
+            const modalVideo = document.getElementById('modalVideo');
+            const modalPlayButton = document.getElementById('modalPlayButton');
+            const currentImageFile = imageFiles[currentImageIndex];
+            
+            // Stop video
+            modalVideo.pause();
+            modalVideo.src = '';
+            modalVideo.classList.add('hidden');
+            
+            // Show image
+            modalImg.classList.remove('hidden');
+            
+            // Show play button if there's a canonical movie
+            if (currentImageFile && currentImageFile.canonicalMovie) {
+                modalPlayButton.classList.remove('hidden');
+            }
+            
+            // Update info
+            const imageName = currentImageFile ? currentImageFile.name : '';
+            const imageCount = imageFiles.length;
+            document.getElementById('modalInfo').textContent = `${imageName} (${currentImageIndex + 1} / ${imageCount})`;
         }
         
         function navigateImage(direction) {
@@ -590,7 +787,7 @@
             // Set new timeout to hide arrows after 2 seconds
             arrowHideTimeout = setTimeout(() => {
                 hideArrows();
-            }, 2000);
+            }, 1000);
         }
         
         // Setup modal event handlers (only once)
@@ -613,6 +810,13 @@
                 if (currentImageIndex < imageFiles.length - 1) {
                     navigateImage('next');
                 }
+            };
+            
+            // Play button click handler
+            const modalPlayButton = document.getElementById('modalPlayButton');
+            modalPlayButton.onclick = function(e) {
+                e.stopPropagation();
+                playCanonicalMovie();
             };
             
             // Close modal when clicking the X
@@ -653,11 +857,11 @@
             });
             
             // Show arrows on mouse movement only
-            modal.addEventListener('mousemove', function() {
-                if (modal.classList.contains('active')) {
-                    showArrows();
-                }
-            });
+            //modal.addEventListener('mousemove', function() {
+            //    if (modal.classList.contains('active')) {
+            //        showArrows();
+            //    }
+            //});
             
             // Touch swipe navigation
             let touchStartX = 0;
@@ -696,8 +900,17 @@
                 const absDeltaX = Math.abs(deltaX);
                 const absDeltaY = Math.abs(deltaY);
                 
+                // Check if it's a vertical swipe (more vertical than horizontal)
+                if (absDeltaY > absDeltaX && absDeltaY > minSwipeDistance) {
+                    // Swipe up or down - dismiss modal
+                    modal.classList.remove('active');
+                    document.body.classList.remove('modal-open');
+                    if (arrowHideTimeout) {
+                        clearTimeout(arrowHideTimeout);
+                    }
+                }
                 // Check if it's a horizontal swipe (more horizontal than vertical)
-                if (absDeltaX > absDeltaY && absDeltaX > minSwipeDistance) {
+                else if (absDeltaX > absDeltaY && absDeltaX > minSwipeDistance) {
                     if (deltaX > 0) {
                         // Swipe right - go to previous image
                         navigateImage('prev');

@@ -13,21 +13,27 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Server struct {
-	rootDir        string
-	indexTmpl      *template.Template
-	thumbnailQueue chan string
-	workersWg      sync.WaitGroup
+	rootDir             string
+	indexTmpl           *template.Template
+	imageThumbnailQueue chan string
+	movieThumbnailQueue chan string
+	imageWorkersWg      sync.WaitGroup
+	movieWorkersWg      sync.WaitGroup
+	pendingThumbs       sync.Map // map[string]chan struct{} - tracks pending thumbnail generations
 }
 
 type FileInfo struct {
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	IsDir     bool   `json:"isDir"`
-	IsImage   bool   `json:"isImage"`
-	Thumbnail string `json:"thumbnail,omitempty"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	IsDir          bool   `json:"isDir"`
+	IsImage        bool   `json:"isImage"`
+	IsMovie        bool   `json:"isMovie"`
+	Thumbnail      string `json:"thumbnail,omitempty"`
+	CanonicalMovie string `json:"canonicalMovie,omitempty"`
 }
 
 type DirectoryResponse struct {
@@ -51,6 +57,17 @@ var imageExtensions = map[string]bool{
 	".DNG":  true,
 }
 
+var movieExtensions = map[string]bool{
+	".mov": true,
+	".MOV": true,
+	".mp4": true,
+	".MP4": true,
+	".avi": true,
+	".AVI": true,
+	".mkv": true,
+	".MKV": true,
+}
+
 // vipsExecutable returns the path to the vips executable
 // On Windows, it looks for vips.exe, otherwise just "vips"
 func vipsExecutable() string {
@@ -58,6 +75,19 @@ func vipsExecutable() string {
 		return "vips.exe"
 	}
 	return "vips"
+}
+
+// getThumbnailPath returns the thumbnail path for a given image path
+// The thumbnail filename includes the original extension to avoid conflicts
+// between files with the same base name but different extensions
+func getThumbnailPath(imagePath string) string {
+	dir := filepath.Dir(imagePath)
+	baseName := filepath.Base(imagePath)
+	// Include the original extension in the thumbnail filename
+	// e.g., photo.jpg -> photo.jpg.jpg, photo.png -> photo.png.jpg
+	thumbnailDir := filepath.Join(dir, ".small")
+	thumbnailPath := filepath.Join(thumbnailDir, baseName+".jpg")
+	return thumbnailPath
 }
 
 func main() {
@@ -91,21 +121,29 @@ func main() {
 		log.Fatalf("Failed to load template: %v", err)
 	}
 
-	// Initialize thumbnail queue with buffer to prevent blocking
-	// Buffer size of 100 allows some queuing before blocking
-	queueSize := 500
-	numWorkers := 3 // Limit concurrent thumbnail generations to prevent memory issues
+	// Initialize thumbnail queues with buffer to prevent blocking
+	// Buffer size of 500 allows some queuing before blocking
+	queueSize := 250
+	numImageWorkers := 2 // Limit concurrent image thumbnail generations to prevent memory issues
+	numMovieWorkers := 1 // Limit concurrent movie thumbnail generations (movies are more resource-intensive)
 
 	server := &Server{
-		rootDir:        absRoot,
-		indexTmpl:      tmpl,
-		thumbnailQueue: make(chan string, queueSize),
+		rootDir:             absRoot,
+		indexTmpl:           tmpl,
+		imageThumbnailQueue: make(chan string, queueSize),
+		movieThumbnailQueue: make(chan string, queueSize),
 	}
 
-	// Start worker goroutines
-	for i := 0; i < numWorkers; i++ {
-		server.workersWg.Add(1)
-		go server.thumbnailWorker(i)
+	// Start image worker goroutines
+	for i := 0; i < numImageWorkers; i++ {
+		server.imageWorkersWg.Add(1)
+		go server.imageThumbnailWorker(i)
+	}
+
+	// Start movie worker goroutines
+	for i := 0; i < numMovieWorkers; i++ {
+		server.movieWorkersWg.Add(1)
+		go server.movieThumbnailWorker(i)
 	}
 
 	http.HandleFunc("/", server.handleIndex)
@@ -167,7 +205,6 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		entryPath := filepath.Join(fullPath, entry.Name())
 		relEntryPath := filepath.Join(path, entry.Name())
 		if path == "/" {
 			relEntryPath = "/" + entry.Name()
@@ -183,22 +220,20 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 
 		// Check if it's an image
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if imageExtensions[ext] {
-			fileInfo.IsImage = true
+		if imageExtensions[ext] || movieExtensions[ext] {
+			if imageExtensions[ext] {
+				fileInfo.IsImage = true
+			}
+			if movieExtensions[ext] {
+				fileInfo.IsMovie = true
+			}
 			// Generate thumbnail path - ensure it starts with / for proper URL
 			thumbPath := urlPath
 			if !strings.HasPrefix(thumbPath, "/") {
 				thumbPath = "/" + thumbPath
 			}
 			fileInfo.Thumbnail = "/api/thumbnail" + thumbPath
-			// Queue thumbnail generation (non-blocking if queue has space)
-			select {
-			case s.thumbnailQueue <- entryPath:
-				// Successfully queued
-			default:
-				// Queue is full, skip to prevent blocking
-				log.Printf("Thumbnail queue full, skipping: %s", entryPath)
-			}
+			// Thumbnail will be generated on-demand when client requests it
 		}
 
 		files = append(files, fileInfo)
@@ -251,17 +286,12 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate thumbnail path
-	dir := filepath.Dir(fullPath)
-	baseName := filepath.Base(fullPath)
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-	thumbnailDir := filepath.Join(dir, ".small")
-	thumbnailPath := filepath.Join(thumbnailDir, nameWithoutExt+".jpg")
+	thumbnailPath := getThumbnailPath(fullPath)
 
 	// Check if thumbnail exists
 	if _, err := os.Stat(thumbnailPath); os.IsNotExist(err) {
-		// Generate thumbnail
-		if err := s.generateThumbnail(fullPath); err != nil {
+		// Queue thumbnail generation and wait for it to complete
+		if err := s.queueAndWaitForThumbnail(fullPath, thumbnailPath); err != nil {
 			http.Error(w, "Failed to generate thumbnail: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -318,40 +348,30 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create temp file for preview
-	tmpFile, err := os.CreateTemp("", "preview-*.jpg")
-	if err != nil {
-		http.Error(w, "Failed to create temp file: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpPath)
-
-	// Use vips thumbnail to resize to max 1600px on longest side and convert to JPEG
-	// vips thumbnail creates a thumbnail on the longest side, which is perfect for previews
+	// Use vips to resize and convert to JPEG, streaming directly to HTTP response
+	// This avoids creating any temporary files - streams directly from vips to client
+	// We'll use vips copy with format options to output JPEG to stdout
 	vipsCmd := vipsExecutable()
-	cmd := exec.Command(vipsCmd, "thumbnail", fullPath, tmpPath, "1600")
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		http.Error(w, "Failed to process image: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	// Read the converted file
-	jpegData, err := os.ReadFile(tmpPath)
-	if err != nil {
-		http.Error(w, "Failed to read converted image: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Set content type and headers
+	// Set content type and headers before writing
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(jpegData)))
 
-	// Write the JPEG data to response
-	w.Write(jpegData)
+	// Use vips thumbnail with output format to stdout
+	// vips thumbnail supports format options in the output filename
+	// Format: vips thumbnail input.jpg -[Q=85,format=jpeg] 1600
+	// The "-" means stdout, and [Q=85,format=jpeg] specifies JPEG format with quality
+	cmd := exec.Command(vipsCmd, "thumbnail", fullPath, ".jpg[Q=60]", "1600")
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = w // Pipe directly to HTTP response
+
+	// Execute command and stream output directly to response
+	if err := cmd.Run(); err != nil {
+		// If we've already started writing, we can't send an error response
+		// Log the error instead
+		log.Printf("Failed to process image %s: %v", fullPath, err)
+		return
+	}
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
@@ -391,13 +411,9 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) generateThumbnail(imagePath string) error {
-	// Check if already exists
-	dir := filepath.Dir(imagePath)
-	baseName := filepath.Base(imagePath)
-	ext := filepath.Ext(baseName)
-	nameWithoutExt := strings.TrimSuffix(baseName, ext)
-	thumbnailDir := filepath.Join(dir, ".small")
-	thumbnailPath := filepath.Join(thumbnailDir, nameWithoutExt+".jpg")
+	// Get thumbnail path (includes original extension)
+	thumbnailPath := getThumbnailPath(imagePath)
+	thumbnailDir := filepath.Dir(thumbnailPath)
 
 	// Check if thumbnail already exists
 	if _, err := os.Stat(thumbnailPath); err == nil {
@@ -409,24 +425,115 @@ func (s *Server) generateThumbnail(imagePath string) error {
 		return fmt.Errorf("failed to create thumbnail directory: %w", err)
 	}
 
-	// Use vips thumbnail command which is optimized for creating thumbnails
-	// vips thumbnail input.jpg output.jpg 300 (creates 300px thumbnail on longest side)
-	vipsCmd := vipsExecutable()
-	cmd := exec.Command(vipsCmd, "thumbnail", imagePath, thumbnailPath, "300")
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to generate thumbnail: %w", err)
+	// Check file extension to determine if it's a movie or image
+	ext := strings.ToLower(filepath.Ext(imagePath))
+
+	if movieExtensions[ext] {
+		// Use ffmpeg for movie files, print only errors
+		// ffmpeg -v error -i <input> -ss 1 -vf "scale=300:-2" -vframes 1 <out>
+		cmd := exec.Command("ffmpeg", "-v", "error", "-ss", "0", "-noaccurate_seek", "-i", imagePath, "-vf", "scale=300:-2", "-vframes", "1", thumbnailPath)
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to generate thumbnail: %w", err)
+		}
+	} else if imageExtensions[ext] {
+		// Use vips thumbnail command which is optimized for creating thumbnails
+		// vips thumbnail input.jpg output.jpg 300 (creates 300px thumbnail on longest side)
+		vipsCmd := vipsExecutable()
+		cmd := exec.Command(vipsCmd, "thumbnail", imagePath, thumbnailPath, "300")
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to generate thumbnail: %w", err)
+		}
+	} else {
+		return fmt.Errorf("unsupported file type for thumbnail generation")
 	}
 
 	return nil
 }
 
-func (s *Server) thumbnailWorker(workerID int) {
-	defer s.workersWg.Done()
+func (s *Server) queueAndWaitForThumbnail(imagePath, thumbnailPath string) error {
+	// Check if thumbnail is already being generated
+	doneChan, alreadyGenerating := s.pendingThumbs.LoadOrStore(thumbnailPath, make(chan struct{}))
+	done := doneChan.(chan struct{})
 
-	for imagePath := range s.thumbnailQueue {
-		if err := s.generateThumbnail(imagePath); err != nil {
-			log.Printf("Worker %d: Failed to generate thumbnail for %s: %v", workerID, imagePath, err)
+	if !alreadyGenerating {
+		// Determine file type to route to appropriate queue
+		ext := strings.ToLower(filepath.Ext(imagePath))
+		var targetQueue chan string
+
+		if movieExtensions[ext] {
+			targetQueue = s.movieThumbnailQueue
+		} else if imageExtensions[ext] {
+			targetQueue = s.imageThumbnailQueue
+		} else {
+			return fmt.Errorf("unsupported file type for thumbnail generation")
+		}
+
+		// We're the first to request this thumbnail, queue it
+		select {
+		case targetQueue <- imagePath:
+			// Successfully queued, wait for completion
+		default:
+			// Queue is full, generate synchronously as fallback
+			err := s.generateThumbnail(imagePath)
+			close(done)
+			s.pendingThumbs.Delete(thumbnailPath)
+			return err
+		}
+	}
+
+	// Wait for thumbnail generation to complete (with timeout)
+	select {
+	case <-done:
+		// Check if thumbnail was actually created
+		if _, err := os.Stat(thumbnailPath); os.IsNotExist(err) {
+			return fmt.Errorf("thumbnail generation completed but file not found")
+		}
+		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("thumbnail generation timeout")
+	}
+}
+
+func (s *Server) imageThumbnailWorker(workerID int) {
+	defer s.imageWorkersWg.Done()
+
+	for imagePath := range s.imageThumbnailQueue {
+		// Get thumbnail path to use as key (includes original extension)
+		thumbnailPath := getThumbnailPath(imagePath)
+
+		// Generate thumbnail
+		err := s.generateThumbnail(imagePath)
+
+		// Notify waiting goroutines that generation is complete
+		if doneChan, ok := s.pendingThumbs.LoadAndDelete(thumbnailPath); ok {
+			close(doneChan.(chan struct{}))
+		}
+
+		if err != nil {
+			log.Printf("Image Worker %d: Failed to generate thumbnail for %s: %v", workerID, imagePath, err)
+		}
+	}
+}
+
+func (s *Server) movieThumbnailWorker(workerID int) {
+	defer s.movieWorkersWg.Done()
+
+	for moviePath := range s.movieThumbnailQueue {
+		// Get thumbnail path to use as key (includes original extension)
+		thumbnailPath := getThumbnailPath(moviePath)
+
+		// Generate thumbnail
+		err := s.generateThumbnail(moviePath)
+
+		// Notify waiting goroutines that generation is complete
+		if doneChan, ok := s.pendingThumbs.LoadAndDelete(thumbnailPath); ok {
+			close(doneChan.(chan struct{}))
+		}
+
+		if err != nil {
+			log.Printf("Movie Worker %d: Failed to generate thumbnail for %s: %v", workerID, moviePath, err)
 		}
 	}
 }
