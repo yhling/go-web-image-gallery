@@ -70,12 +70,12 @@ var movieExtensions = map[string]bool{
 }
 
 // vipsExecutable returns the path to the vips executable
-// On Windows, it looks for vips.exe, otherwise just "vips"
+// On Windows, it looks for vipsthumbnail.exe, otherwise just "vipsthumbnail"
 func vipsExecutable() string {
-	if _, err := exec.LookPath("vips.exe"); err == nil {
-		return "vips.exe"
+	if _, err := exec.LookPath("vipsthumbnail.exe"); err == nil {
+		return "vipsthumbnail.exe"
 	}
-	return "vips"
+	return "vipsthumbnail"
 }
 
 // urlWithBasePath prepends the base path to a URL path
@@ -384,18 +384,24 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// Use vips thumbnail with output format to stdout
-	// vips thumbnail supports format options in the output filename
-	// Format: vips thumbnail input.jpg -[Q=85,format=jpeg] 1600
-	// The "-" means stdout, and [Q=85,format=jpeg] specifies JPEG format with quality
-	cmd := exec.Command(vipsCmd, "thumbnail", fullPath, ".jpg[Q=60]", "1600")
+	// Use vips thumbnail reading input from stdin
+	// Open the file for reading
+	file, err := os.Open(fullPath)
+	if err != nil {
+		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// Use "-" for stdin and stdout
+	cmd := exec.Command(vipsCmd, "stdin", "-s", "1600", "-o", ".jpg")
 	cmd.Stderr = os.Stderr
-	cmd.Stdout = w // Pipe directly to HTTP response
+	cmd.Stdout = w   // Output to HTTP response
+	cmd.Stdin = file // Input comes from file
 
 	// Execute command and stream output directly to response
 	if err := cmd.Run(); err != nil {
 		// If we've already started writing, we can't send an error response
-		// Log the error instead
 		log.Printf("Failed to process image %s: %v", fullPath, err)
 		return
 	}
@@ -464,10 +470,16 @@ func (s *Server) generateThumbnail(imagePath string) error {
 			return fmt.Errorf("failed to generate thumbnail: %w", err)
 		}
 	} else if imageExtensions[ext] {
-		// Use vips thumbnail command which is optimized for creating thumbnails
-		// vips thumbnail input.jpg output.jpg 300 (creates 300px thumbnail on longest side)
+		// Use vips to read from stdin and output a .jpg, resize to 1600px
 		vipsCmd := vipsExecutable()
-		cmd := exec.Command(vipsCmd, "thumbnail", imagePath, thumbnailPath, "300")
+		file, err := os.Open(imagePath)
+		if err != nil {
+			return fmt.Errorf("failed to open image for vips stdin: %w", err)
+		}
+		defer file.Close()
+
+		cmd := exec.Command(vipsCmd, "stdin", "-s", "300", "-o", thumbnailPath)
+		cmd.Stdin = file
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to generate thumbnail: %w", err)
