@@ -294,7 +294,7 @@
             height: 100%;
             object-fit: contain;
             z-index: 1001;
-            transition: transform 0.1s ease-out;
+            /* transition: transform 0.1s ease-out; */
             transform-origin: center center;
             will-change: transform;
         }
@@ -910,6 +910,12 @@
             });
         }
         
+        function stopCanonicalMovie() {
+            const modalVideo = document.getElementById('modalVideo');
+            modalVideo.pause();
+            modalVideo.src = '';
+        }
+        
         function showImageFromVideo() {
             const modalImg = document.getElementById('modalImage');
             const modalVideo = document.getElementById('modalVideo');
@@ -1082,8 +1088,15 @@
                 playCanonicalMovie();
             };
             
+            // Video ended handler - reinstate preview image when video finishes
+            const modalVideo = document.getElementById('modalVideo');
+            modalVideo.addEventListener('ended', function() {
+                showImageFromVideo();
+            });
+            
             // Close modal when clicking the X
             modalClose.onclick = function() {
+                stopCanonicalMovie();
                 modal.classList.remove('active');
                 document.body.classList.remove('modal-open');
                 resetZoom();
@@ -1095,6 +1108,7 @@
             // Close modal when clicking outside the image
             modal.onclick = function(e) {
                 if (e.target === modal) {
+                    stopCanonicalMovie();
                     modal.classList.remove('active');
                     document.body.classList.remove('modal-open');
                     resetZoom();
@@ -1109,6 +1123,7 @@
                 if (!modal.classList.contains('active')) return;
                 
                 if (e.key === 'Escape') {
+                    stopCanonicalMovie();
                     modal.classList.remove('active');
                     document.body.classList.remove('modal-open');
                     resetZoom();
@@ -1261,6 +1276,7 @@
                     // Check if it's a vertical swipe (more vertical than horizontal)
                     if (absDeltaY > absDeltaX && absDeltaY > minSwipeDistance) {
                         // Swipe up or down - dismiss modal
+                        stopCanonicalMovie();
                         modal.classList.remove('active');
                         document.body.classList.remove('modal-open');
                         resetZoom();
