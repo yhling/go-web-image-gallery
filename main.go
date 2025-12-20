@@ -368,42 +368,73 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if it's an image
+	// Check if it's an image or movie
 	ext := strings.ToLower(filepath.Ext(fullPath))
-	if !imageExtensions[ext] {
-		http.Error(w, "Not an image file", http.StatusBadRequest)
+	isImage := imageExtensions[ext]
+	isMovie := movieExtensions[ext]
+
+	if !isImage && !isMovie {
+		http.Error(w, "Not an image or movie file", http.StatusBadRequest)
 		return
 	}
 
-	// Use vips to resize and convert to JPEG, streaming directly to HTTP response
-	// This avoids creating any temporary files - streams directly from vips to client
-	// We'll use vips copy with format options to output JPEG to stdout
-	vipsCmd := vipsExecutable()
-
-	// Set content type and headers before writing
-	w.Header().Set("Content-Type", "image/jpeg")
+	// Set cache control header
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 
-	// Use vips thumbnail reading input from stdin
-	// Open the file for reading
-	file, err := os.Open(fullPath)
-	if err != nil {
-		http.Error(w, "Failed to open file", http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
+	if isMovie {
+		// Handle movie files with ffmpeg
+		// Use ffmpeg to transcode: hevc_qsv input -> h264_qsv output, streaming to HTTP response
+		w.Header().Set("Content-Type", "video/mp2t")
 
-	// Use "-" for stdin and stdout
-	cmd := exec.Command(vipsCmd, "stdin", "-s", "1600", "-o", ".jpg")
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = w   // Output to HTTP response
-	cmd.Stdin = file // Input comes from file
+		cmd := exec.Command("ffmpeg",
+			"-c:v", "hevc_qsv",
+			"-loglevel", "quiet",
+			"-i", fullPath,
+			"-c:a", "aac",
+			"-b:a", "64k",
+			"-c:v", "h264_qsv",
+			"-b:v", "500k",
+			"-f", "mpegts",
+			"pipe:1")
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = w // Output to HTTP response
 
-	// Execute command and stream output directly to response
-	if err := cmd.Run(); err != nil {
-		// If we've already started writing, we can't send an error response
-		log.Printf("Failed to process image %s: %v", fullPath, err)
-		return
+		// Execute command and stream output directly to response
+		if err := cmd.Run(); err != nil {
+			// If we've already started writing, we can't send an error response
+			log.Printf("Failed to process movie %s: %v", fullPath, err)
+			return
+		}
+	} else {
+		// Handle image files with vips
+		// Use vips to resize and convert to JPEG, streaming directly to HTTP response
+		// This avoids creating any temporary files - streams directly from vips to client
+		vipsCmd := vipsExecutable()
+
+		// Set content type and headers before writing
+		w.Header().Set("Content-Type", "image/jpeg")
+
+		// Use vips thumbnail reading input from stdin
+		// Open the file for reading
+		file, err := os.Open(fullPath)
+		if err != nil {
+			http.Error(w, "Failed to open file", http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		// Use "-" for stdin and stdout
+		cmd := exec.Command(vipsCmd, "stdin", "-s", "1600", "-o", ".jpg")
+		cmd.Stderr = os.Stderr
+		cmd.Stdout = w   // Output to HTTP response
+		cmd.Stdin = file // Input comes from file
+
+		// Execute command and stream output directly to response
+		if err := cmd.Run(); err != nil {
+			// If we've already started writing, we can't send an error response
+			log.Printf("Failed to process image %s: %v", fullPath, err)
+			return
+		}
 	}
 }
 
