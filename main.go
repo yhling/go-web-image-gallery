@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,7 +175,10 @@ func main() {
 	http.HandleFunc("/api/list", server.handleList)
 	http.HandleFunc("/api/thumbnail/", server.handleThumbnail)
 	http.HandleFunc("/api/preview/", server.handlePreview)
+	http.HandleFunc("/api/file.ts", server.handleFileTS)
+	http.HandleFunc("/api/file.m3u8", server.handleM3U8)
 	http.HandleFunc("/static/", server.handleStatic)
+	http.HandleFunc("/assets/", server.handleAssets)
 
 	log.Printf("Server starting on port %s, serving directory: %s", *port, absRoot)
 	log.Fatal(http.ListenAndServe(":"+*port, nil))
@@ -371,71 +375,148 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 	// Check if it's an image or movie
 	ext := strings.ToLower(filepath.Ext(fullPath))
 	isImage := imageExtensions[ext]
-	isMovie := movieExtensions[ext]
 
-	if !isImage && !isMovie {
-		http.Error(w, "Not an image or movie file", http.StatusBadRequest)
+	if !isImage {
+		http.Error(w, "Not an image file", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	// Handle image files with vips
+	// Use vips to resize and convert to JPEG, streaming directly to HTTP response
+	// This avoids creating any temporary files - streams directly from vips to client
+	vipsCmd := vipsExecutable()
+
+	// Set content type and headers before writing
+	w.Header().Set("Content-Type", "image/jpeg")
+
+	// Use vips thumbnail reading input from stdin
+	// Open the file for reading
+	file, err := os.Open(fullPath)
+	if err != nil {
+		http.Error(w, "Failed to open file", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// Use "-" for stdin and stdout
+	cmd := exec.Command(vipsCmd, "stdin", "-s", "1600", "-o", ".jpg")
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = w   // Output to HTTP response
+	cmd.Stdin = file // Input comes from file
+
+	// Execute command and stream output directly to response
+	if err := cmd.Run(); err != nil {
+		// If we've already started writing, we can't send an error response
+		log.Printf("Failed to process image %s: %v", fullPath, err)
+		return
+	}
+}
+
+func (s *Server) handleFileTS(w http.ResponseWriter, r *http.Request) {
+	// Get path from query parameter
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "Path query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Convert URL path (forward slashes) to filesystem path
+	fsPath := filepath.FromSlash(path)
+
+	// Clean the path
+	fsPath = filepath.Clean(fsPath)
+	if fsPath == "." {
+		fsPath = "/"
+	}
+
+	// Build full path
+	var fullPath string
+	if fsPath == "/" || fsPath == "" {
+		fullPath = s.rootDir
+	} else {
+		fullPath = filepath.Join(s.rootDir, fsPath)
+	}
+
+	// Security check
+	relPath, err := filepath.Rel(s.rootDir, fullPath)
+	if err != nil || strings.HasPrefix(relPath, "..") {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if it's a movie file
+	ext := strings.ToLower(filepath.Ext(fullPath))
+	if !movieExtensions[ext] {
+		http.Error(w, "Not a movie file", http.StatusBadRequest)
 		return
 	}
 
 	// Set cache control header
 	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Type", "video/mp2t")
 
-	if isMovie {
-		// Handle movie files with ffmpeg
-		// Use ffmpeg to transcode: hevc_qsv input -> h264_qsv output, streaming to HTTP response
-		w.Header().Set("Content-Type", "video/mp2t")
+	// Use ffmpeg to transcode: hevc_qsv input -> h264_qsv output, streaming to HTTP response
+	cmd := exec.Command("ffmpeg",
+		"-c:v", "hevc_qsv",
+		"-loglevel", "quiet",
+		"-i", fullPath,
+		"-c:a", "aac",
+		"-b:a", "64k",
+		"-c:v", "h264_qsv",
+		"-b:v", "500k",
+		"-f", "mpegts",
+		"pipe:1")
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = w // Output to HTTP response
 
-		cmd := exec.Command("ffmpeg",
-			"-c:v", "hevc_qsv",
-			"-loglevel", "quiet",
-			"-i", fullPath,
-			"-c:a", "aac",
-			"-b:a", "64k",
-			"-c:v", "h264_qsv",
-			"-b:v", "500k",
-			"-f", "mpegts",
-			"pipe:1")
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = w // Output to HTTP response
-
-		// Execute command and stream output directly to response
-		if err := cmd.Run(); err != nil {
-			// If we've already started writing, we can't send an error response
-			log.Printf("Failed to process movie %s: %v", fullPath, err)
-			return
-		}
-	} else {
-		// Handle image files with vips
-		// Use vips to resize and convert to JPEG, streaming directly to HTTP response
-		// This avoids creating any temporary files - streams directly from vips to client
-		vipsCmd := vipsExecutable()
-
-		// Set content type and headers before writing
-		w.Header().Set("Content-Type", "image/jpeg")
-
-		// Use vips thumbnail reading input from stdin
-		// Open the file for reading
-		file, err := os.Open(fullPath)
-		if err != nil {
-			http.Error(w, "Failed to open file", http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		// Use "-" for stdin and stdout
-		cmd := exec.Command(vipsCmd, "stdin", "-s", "1600", "-o", ".jpg")
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = w   // Output to HTTP response
-		cmd.Stdin = file // Input comes from file
-
-		// Execute command and stream output directly to response
-		if err := cmd.Run(); err != nil {
-			// If we've already started writing, we can't send an error response
-			log.Printf("Failed to process image %s: %v", fullPath, err)
-			return
-		}
+	// Execute command and stream output directly to response
+	if err := cmd.Run(); err != nil {
+		// If we've already started writing, we can't send an error response
+		log.Printf("Failed to process movie %s: %v", fullPath, err)
+		return
 	}
+}
+
+func (s *Server) handleM3U8(w http.ResponseWriter, r *http.Request) {
+	// Get path from query parameter
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "Path query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure path starts with / for URL
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// Build file.ts URL with base path and query parameter
+	fileTSUrl := s.urlWithBasePath("/api/file.ts") + "?path=" + url.QueryEscape(path)
+
+	// Generate m3u8 playlist content
+	// This is a simple m3u8 that points to the file.ts endpoint
+	// The file.ts endpoint streams MPEG-TS which is compatible with HLS
+	m3u8Content := fmt.Sprintf(`#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXTINF:10.0,
+%s
+#EXT-X-ENDLIST
+`, fileTSUrl)
+
+	// Set content type for m3u8 files
+	w.Header().Set("Content-Type", "application/x-mpegURL")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+
+	// Write m3u8 content
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(m3u8Content))
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
@@ -468,6 +549,56 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
+	}
+
+	// Serve file
+	http.ServeFile(w, r, fullPath)
+}
+
+func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
+	// Extract filename from URL path
+	path := strings.TrimPrefix(r.URL.Path, "/assets/")
+	if path == "" {
+		http.Error(w, "Path required", http.StatusBadRequest)
+		return
+	}
+
+	// Clean the path to prevent directory traversal
+	path = filepath.Clean(path)
+	if path == "." || path == "/" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Get current working directory (where the program is run from)
+	// The template is loaded from "templates/index.html" relative to CWD
+	wd, err := os.Getwd()
+	if err != nil {
+		http.Error(w, "Failed to determine working directory", http.StatusInternalServerError)
+		return
+	}
+
+	// Build full path to static assets directory
+	assetsDir := filepath.Join(wd, "static")
+	fullPath := filepath.Join(assetsDir, path)
+
+	// Security check: ensure the resolved path is within the assets directory
+	relPath, err := filepath.Rel(assetsDir, fullPath)
+	if err != nil || strings.HasPrefix(relPath, "..") {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Set appropriate content type for JavaScript files
+	if strings.HasSuffix(path, ".js") {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "public, max-age=31536000") // Cache for 1 year
 	}
 
 	// Serve file

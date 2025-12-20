@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Image Gallery</title>
+    <script src="{{if .BasePath}}{{.BasePath}}{{end}}/assets/hls.js"></script>
     <style>
         * {
             margin: 0;
@@ -463,6 +464,7 @@
         let arrowHideTimeout = null;
         let currentPreviewImage = null; // Track current preview image being loaded
         let currentImagePath = null; // Track current image path to prevent race conditions
+        let hls = null; // HLS.js instance for browsers that don't support native HLS
         
         // Create a single Intersection Observer for all images
         let imageObserver = null;
@@ -894,26 +896,80 @@
             modalPlayButton.classList.add('hidden');
             modalVideo.classList.remove('hidden');
             
-            // Set video source
-            const videoSrc = urlWithBasePath('/static/' + encodeURIComponent(currentImageFile.canonicalMovie));
-            modalVideo.src = videoSrc;
+            // Set video source to m3u8 endpoint
+            const videoSrc = urlWithBasePath('/api/file.m3u8?path=' + encodeURIComponent(currentImageFile.canonicalMovie));
+            
+            // Clean up any existing HLS instance
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            
+            // Check if browser supports native HLS playback
+            if (modalVideo.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS support (Safari, etc.)
+                modalVideo.src = videoSrc;
+                modalVideo.play().catch(err => {
+                    console.error('Failed to play video:', err);
+                    modalInfo.textContent = 'Failed to play video';
+                });
+            } else if (Hls.isSupported()) {
+                // Use hls.js for browsers that don't support native HLS
+                hls = new Hls();
+                hls.loadSource(videoSrc);
+                hls.attachMedia(modalVideo);
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    modalVideo.play().catch(err => {
+                        console.error('Failed to play video:', err);
+                        modalInfo.textContent = 'Failed to play video';
+                    });
+                });
+                
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    console.error('HLS error:', data);
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                modalInfo.textContent = 'Network error - trying to recover...';
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                modalInfo.textContent = 'Media error - trying to recover...';
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                modalInfo.textContent = 'Failed to play video';
+                                hls.destroy();
+                                hls = null;
+                                break;
+                        }
+                    }
+                });
+            } else {
+                // No HLS support at all
+                modalInfo.textContent = 'HLS playback not supported in this browser';
+                console.error('HLS playback not supported');
+            }
             
             // Update info to show we're playing the movie
             const imageName = currentImageFile.name;
             const imageCount = imageFiles.length;
-            modalInfo.textContent = `Playing: ${imageName} (${currentImageIndex + 1} / ${imageCount})`;
-            
-            // Play the video
-            modalVideo.play().catch(err => {
-                console.error('Failed to play video:', err);
-                modalInfo.textContent = 'Failed to play video';
-            });
+            if (!modalInfo.textContent.includes('error') && !modalInfo.textContent.includes('Failed')) {
+                modalInfo.textContent = `Playing: ${imageName} (${currentImageIndex + 1} / ${imageCount})`;
+            }
         }
         
         function stopCanonicalMovie() {
             const modalVideo = document.getElementById('modalVideo');
             modalVideo.pause();
             modalVideo.src = '';
+            
+            // Clean up HLS.js instance if it exists
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
         }
         
         function showImageFromVideo() {
@@ -926,6 +982,12 @@
             modalVideo.pause();
             modalVideo.src = '';
             modalVideo.classList.add('hidden');
+            
+            // Clean up HLS.js instance if it exists
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
             
             // Show image
             modalImg.classList.remove('hidden');
