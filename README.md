@@ -17,9 +17,12 @@ directory-server.exe -root "D:\Photos" -port 8080
 
 **Arguments:**
 ```
-- `-root`: Root directory to serve (if not specified defaults to current directory)
-- `-port`: Port to listen on (default: 8080)
-- `-base-path`: Base path for the application when behind a reverse proxy (e.g., `/gallery`) (default: empty)
+  -base-path string
+        Base path for the application (e.g., /gallery)
+  -port string
+        Port to listen on (default: 8080) (default "8080")
+  -root string
+        Root directory to serve (default: current directory) (default ".")
 ```
 
 On your browser go to:
