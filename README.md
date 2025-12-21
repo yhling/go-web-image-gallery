@@ -12,7 +12,7 @@ A simple Go based web server that turns your directories into a iCloud-like imag
 ## Usage
 
 ```bash
-directory-server.exe -base-path /gallery -root "D:\Photos" -port 8080
+directory-server.exe -root "D:\Photos" -port 8080
 ```
 
 **Arguments:**
@@ -57,15 +57,4 @@ Windows
 ```bash
 go build -o directory-server.exe
 ```
-
-## API Endpoints
-
-- `GET /` - Main web interface
-- `GET /api/list?path=/` - JSON API for directory listing
-- `GET /api/thumbnail/<path>` - Serves thumbnail for an image
-- `GET /static/<path>` - Serves static files
-
-## Security
-
-The server includes path traversal protection to ensure users can only access files within the specified root directory.
 
