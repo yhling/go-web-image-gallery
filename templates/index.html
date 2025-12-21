@@ -298,9 +298,12 @@
             /* transition: transform 0.1s ease-out; */
             transform-origin: center center;
             will-change: transform;
+            opacity: 1;
+            transition: opacity 0.5s ease-in-out;
         }
         .modal-content.hidden {
-            display: none;
+            opacity: 0;
+            pointer-events: none;
         }
         .modal-content.zoomed {
             cursor: grab;
@@ -409,9 +412,17 @@
             height: 100%;
             object-fit: contain;
             z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+            pointer-events: none;
         }
         .modal-video.hidden {
-            display: none;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .modal-video:not(.hidden) {
+            opacity: 1;
+            pointer-events: auto;
         }
     </style>
 </head>
@@ -891,12 +902,10 @@
             // Reset zoom when playing live
             resetZoom();
             
-            // Hide image and play button, show video
-            modalImg.classList.add('hidden');
+            // Hide play button immediately
             modalPlayButton.classList.add('hidden');
-            modalVideo.classList.remove('hidden');
             
-            // Set video source to m3u8 endpoint
+            // Set video source to m3u8 endpoint before showing
             const videoSrc = urlWithBasePath('/api/file.m3u8?path=' + encodeURIComponent(currentImageFile.canonicalMovie));
             
             // Clean up any existing HLS instance
@@ -904,6 +913,9 @@
                 hls.destroy();
                 hls = null;
             }
+            
+            // Prepare video (but don't show yet)
+            modalVideo.classList.remove('hidden');
             
             // Check if browser supports native HLS playback
             if (modalVideo.canPlayType('application/vnd.apple.mpegurl')) {
@@ -952,6 +964,9 @@
                 console.error('HLS playback not supported');
             }
             
+            // Fade out image and fade in video
+            modalImg.classList.add('hidden');
+            
             // Update info to show we're playing the movie
             const imageName = currentImageFile.name;
             const imageCount = imageFiles.length;
@@ -978,18 +993,22 @@
             const modalPlayButton = document.getElementById('modalPlayButton');
             const currentImageFile = imageFiles[currentImageIndex];
             
-            // Stop video
-            modalVideo.pause();
-            modalVideo.src = '';
+            // Fade out video and fade in image
             modalVideo.classList.add('hidden');
             
-            // Clean up HLS.js instance if it exists
-            if (hls) {
-                hls.destroy();
-                hls = null;
-            }
+            // Stop video after fade starts
+            setTimeout(() => {
+                modalVideo.pause();
+                modalVideo.src = '';
+                
+                // Clean up HLS.js instance if it exists
+                if (hls) {
+                    hls.destroy();
+                    hls = null;
+                }
+            }, 100);
             
-            // Show image
+            // Show image (fade in)
             modalImg.classList.remove('hidden');
             
             // Show play button if there's a canonical movie

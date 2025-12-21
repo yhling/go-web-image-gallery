@@ -1,17 +1,36 @@
-# YAIG - Yet Another Image Gallery
+# Go web image gallery
 
-A super fast zero-dependency Go based web server that turns your directories into a image gallery. Making it iCloud-like.
+A simple Go based web server that turns your directories into a iCloud-like image gallery.
 
 ## Features
 
 - Standalone executable. No DB, no frameworks, no containers.
-- Supports previewing almost every image format (including HEIC, DNG, ARW). Video playback depends on browser.
+- Supports viewing of almost every image format (including HEIC, DNG, ARW) on every browser.
+- Supports iOS live photos
 - Fast preview and thumbnail generation
 
-### Run prerequisites
+## Usage
+
+```bash
+directory-server.exe -base-path /gallery -root "D:\Photos" -port 8080
+```
+
+**Arguments:**
+```
+- `-root`: Root directory to serve (if not specified defaults to current directory)
+- `-port`: Port to listen on (default: 8080)
+- `-base-path`: Base path for the application when behind a reverse proxy (e.g., `/gallery`) (default: empty)
+```
+
+On your browser go to:
+```
+http://localhost:8080/gallery
+```
+
+## Prerequisites
 
 **Windows:**
-Download and run the .exe
+None, all binaries are included in the zip
 
 **macOS:**
 ```bash
@@ -28,48 +47,15 @@ sudo apt-get install libvips-dev ffmpeg
 sudo dnf install vips-devel ffmpeg
 ```
 
-### Build (for Mac/Linux)
-
+## Build 
+Mac/Linux
 ```bash
 go build -o directory-server
 ```
 
-## Usage
-
-### Command-Line Arguments
-
-Run the server with command-line arguments:
-
+Windows
 ```bash
-./directory-server -root /path/to/your/directory -port 8080
-```
-
-**Arguments:**
-- `-root`: Root directory to serve (default: current directory)
-- `-port`: Port to listen on (default: 8080)
-- `-base-path`: Base path for the application when behind a reverse proxy (e.g., `/gallery`) (default: empty)
-
-**Examples:**
-
-```bash
-# Use default settings (current directory, port 8080)
-./directory-server
-
-# Specify root directory
-./directory-server -root /path/to/images
-
-# Specify both root directory and port
-./directory-server -root /path/to/images -port 3000
-
-# Use with base path for reverse proxy (e.g., nginx)
-./directory-server -root /path/to/images -port 8080 -base-path /gallery
-```
-
-### Access the Web Interface
-
-Open your browser and navigate to:
-```
-http://localhost:8080
+go build -o directory-server.exe
 ```
 
 ## API Endpoints
